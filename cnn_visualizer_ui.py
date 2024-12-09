@@ -90,8 +90,38 @@ class CNNVisualizer:
             try:
                 self.log_message("Loading dataset...")
                 self.X, self.y, input_shape = preprocess_images(folder_path)
-                self.output_size.set(self.y.shape[1])
-                self.log_message(f"Dataset loaded: {self.X.shape[0]} samples, {self.y.shape[1]} classes")
+
+                # Validate dataset and labels
+                self.log_message(f"X shape: {self.X.shape}")
+                self.log_message(f"y shape: {self.y.shape}")
+
+                # Check inferred number of classes
+                num_classes = self.y.shape[1]
+                self.log_message(f"Number of classes inferred from labels: {num_classes}")
+
+                # Print the first few label vectors to check one-hot encoding
+                self.log_message("First 5 label vectors:")
+                for i in range(min(5, self.X.shape[0])):
+                    self.log_message(str(self.y[i]))
+
+                # Check class distribution
+                labels_indices = np.argmax(self.y, axis=1)
+                unique_classes, counts = np.unique(labels_indices, return_counts=True)
+                self.log_message("Class distribution:")
+                for cls, count in zip(unique_classes, counts):
+                    self.log_message(f"Class {cls}: {count} samples")
+
+                # Display one sample image and its label for manual verification
+                sample_index = 0
+                fig, ax = plt.subplots()
+                ax.imshow(self.X[sample_index].reshape(self.X.shape[1], self.X.shape[2]), cmap='gray')
+                ax.set_title(f"Label vector: {self.y[sample_index]}")
+                plt.tight_layout()
+                plt.show()
+
+                # Proceed to set output size and initialize network after validation
+                self.output_size.set(num_classes)
+                self.log_message(f"Dataset loaded: {self.X.shape[0]} samples, {num_classes} classes")
                 self.log_message(f"Class distribution: {Counter(np.argmax(self.y, axis=1))}")
                 self.generate_network(input_shape)
                 self.draw_network_architecture()
@@ -162,7 +192,7 @@ class CNNVisualizer:
         if self.X.size == 0 or self.y.size == 0:
             self.log_message("Invalid dataset. Please load a valid dataset before training.")
             return
-        epochs = 100
+        epochs = 10
         learning_rate = self.learning_rate.get()
         self.log_message("Starting training...")
         for epoch in range(epochs):
