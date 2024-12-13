@@ -1,255 +1,184 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-import threading
+from tkinter import ttk
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from cnn_logic import CNNModel, preprocess_images
 import numpy as np
-from collections import Counter
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.patches import Circle
+from matplotlib import rcParams
 
 
-class CNNVisualizer:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("CNN Training Visualization")
-        self.create_ui()
+class TrainerApp:
+    """
+    Trainer application with enhanced UI for visualizing CNN training in real-time.
+    """
 
-        self.X = None
-        self.y = None
-        self.network = None
-        self.loss_values = []
-        self.accuracy_values = []
+    def __init__(self, master, X_train, y_train, conv, pool, full, lr=0.01, epochs=10):
+        """
+        Initialize the TrainerApp with data, model layers, and training parameters.
+        """
+        rcParams.update({
+            "axes.facecolor": "white",
+            "axes.edgecolor": "black",
+            "axes.labelcolor": "black",
+            "xtick.color": "black",
+            "ytick.color": "black",
+            "figure.facecolor": "white",
+            "figure.edgecolor": "white",
+            "grid.color": "gray",
+        })
 
-    def create_ui(self):
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.master = master
+        self.master.title("CNN Training Visualizer")
+        self.master.geometry("1200x800")
 
-        left_frame = ttk.Frame(main_frame, padding="10")
-        left_frame.grid(row=0, column=0, sticky=(tk.N, tk.W, tk.S))
+        self.X_train = X_train
+        self.y_train = y_train
+        self.conv = conv
+        self.pool = pool
+        self.full = full
+        self.lr = lr
+        self.epochs = epochs
+        self.current_epoch = 0
 
-        right_frame = ttk.Frame(main_frame, padding="10")
-        right_frame.grid(row=0, column=1, sticky=(tk.N, tk.E, tk.S))
+        # Initialize loss and accuracy tracking
+        self.losses = []
+        self.accuracies = []
 
-        controls_frame = ttk.Frame(left_frame, padding="10")
-        controls_frame.grid(row=0, column=0, sticky=(tk.N, tk.W))
+        # Style configuration
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure('TFrame', background='#2b2b2b')
+        style.configure('TLabel', background='#2b2b2b', foreground='white', font=('Helvetica', 12))
+        style.configure('TButton', background='#1c1c1c', foreground='white', font=('Helvetica', 14, 'bold'))
 
-        ttk.Label(controls_frame, text="Number of Classes:").grid(row=0, column=0, sticky=tk.W)
-        self.output_size = tk.IntVar(value=10)
-        ttk.Entry(controls_frame, textvariable=self.output_size).grid(row=0, column=1, sticky=tk.W)
+        # Main layout
+        main_frame = ttk.Frame(self.master, style='TFrame')
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(controls_frame, text="Learning Rate:").grid(row=1, column=0, sticky=tk.W)
-        self.learning_rate = tk.DoubleVar(value=0.001)
-        ttk.Entry(controls_frame, textvariable=self.learning_rate).grid(row=1, column=1, sticky=tk.W)
+        # Sidebar for controls
+        sidebar = ttk.Frame(main_frame, style='TFrame', width=200)
+        sidebar.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
 
-        ttk.Button(controls_frame, text="Load Dataset", command=self.load_images).grid(row=2, column=0, sticky=tk.W)
-        ttk.Button(controls_frame, text="Start Training", command=self.start_training_thread).grid(row=2, column=1, sticky=tk.W)
-        ttk.Button(controls_frame, text="Visualize Filters", command=self.visualize_filters).grid(row=3, column=0, sticky=tk.W)
-        ttk.Button(controls_frame, text="Visualize Feature Maps", command=self.visualize_feature_maps).grid(row=3, column=1, sticky=tk.W)
-
-        self.canvas = tk.Canvas(left_frame, width=400, height=300, bg="white")
-        self.canvas.grid(row=1, column=0, padx=10, pady=10, sticky=tk.W)
-
-        plot_frame = ttk.Frame(right_frame, padding="5")
-        plot_frame.grid(row=0, column=0, sticky=(tk.N, tk.W, tk.E))
-
-        self.figure = plt.Figure(figsize=(5, 4), dpi=100)
-        self.loss_ax = self.figure.add_subplot(111)
-        self.loss_ax.set_title("Training Loss")
-        self.loss_ax.set_xlabel("Epoch")
-        self.loss_ax.set_ylabel("Loss")
-        self.loss_ax.grid()
-
-        self.loss_canvas = FigureCanvasTkAgg(self.figure, plot_frame)
-        self.loss_canvas.get_tk_widget().grid(row=0, column=0, padx=10, pady=10)
-
-        log_frame = ttk.Frame(right_frame, padding="5")
-        log_frame.grid(row=1, column=0, sticky=(tk.N, tk.W, tk.E, tk.S))
-
-        ttk.Label(log_frame, text="Training Log:").grid(row=0, column=0, sticky=tk.W)
-
-        self.log_text = tk.Text(log_frame, wrap="word", height=10, width=60)
-        self.log_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.log_text.config(state=tk.DISABLED)
-
-        log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
-        self.log_text['yscrollcommand'] = log_scroll.set
-        log_scroll.grid(row=1, column=1, sticky=(tk.N, tk.S))
-
-        self.accuracy_label = ttk.Label(controls_frame, text="")
-        self.accuracy_label.grid(row=4, column=0, columnspan=2, sticky=tk.W)
-
-    def log_message(self, message):
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, message + "\n")
-        self.log_text.see(tk.END)
-        self.log_text.config(state=tk.DISABLED)
-
-    def load_images(self):
-        folder_path = filedialog.askdirectory()
-        if folder_path:
-            try:
-                self.log_message("Loading dataset...")
-                self.X, self.y, input_shape = preprocess_images(folder_path)
-
-                # Validate dataset and labels
-                self.log_message(f"X shape: {self.X.shape}")
-                self.log_message(f"y shape: {self.y.shape}")
-
-                # Check inferred number of classes
-                num_classes = self.y.shape[1]
-                self.log_message(f"Number of classes inferred from labels: {num_classes}")
-
-                # Print the first few label vectors to check one-hot encoding
-                self.log_message("First 5 label vectors:")
-                for i in range(min(5, self.X.shape[0])):
-                    self.log_message(str(self.y[i]))
-
-                # Check class distribution
-                labels_indices = np.argmax(self.y, axis=1)
-                unique_classes, counts = np.unique(labels_indices, return_counts=True)
-                self.log_message("Class distribution:")
-                for cls, count in zip(unique_classes, counts):
-                    self.log_message(f"Class {cls}: {count} samples")
-
-                # Display one sample image and its label for manual verification
-                sample_index = 0
-                fig, ax = plt.subplots()
-                ax.imshow(self.X[sample_index].reshape(self.X.shape[1], self.X.shape[2]), cmap='gray')
-                ax.set_title(f"Label vector: {self.y[sample_index]}")
-                plt.tight_layout()
-                plt.show()
-
-                # Proceed to set output size and initialize network after validation
-                self.output_size.set(num_classes)
-                self.log_message(f"Dataset loaded: {self.X.shape[0]} samples, {num_classes} classes")
-                self.log_message(f"Class distribution: {Counter(np.argmax(self.y, axis=1))}")
-                self.generate_network(input_shape)
-                self.draw_network_architecture()
-                self.log_message("Network initialized.")
-                messagebox.showinfo("Dataset Loaded", "Dataset loaded successfully!")
-            except Exception as e:
-                self.log_message(f"Error: {e}")
-                messagebox.showerror("Error", f"Failed to load dataset:\n{str(e)}")
-
-    def generate_network(self, input_shape):
-        self.network = CNNModel(input_shape=input_shape, num_classes=self.output_size.get())
-
-    def draw_network_architecture(self):
-        if not self.network:
-            self.log_message("No network to visualize.")
-            return
-
-        self.canvas.delete("all")
-
-        canvas_width = self.canvas.winfo_width()
-        canvas_height = self.canvas.winfo_height()
-        layer_spacing = 150
-        node_radius = 20
-
-        x_offset = 50
-        y_center = canvas_height // 2
-
-        input_shape = self.network.input_shape
-        input_label = f"Input: {input_shape[0]}x{input_shape[1]}x{input_shape[2]}"
-        self.canvas.create_oval(
-            x_offset - node_radius, y_center - node_radius,
-            x_offset + node_radius, y_center + node_radius,
-            fill="blue", outline="black"
+        # Status Label
+        self.status_label = ttk.Label(
+            sidebar, text="Status: Ready", style="TLabel", anchor="center", wraplength=180
         )
-        self.canvas.create_text(x_offset, y_center + 30, text=input_label)
+        self.status_label.pack(pady=20)
 
-        x_offset += layer_spacing
-        for i, (layer_type, layer_info) in enumerate(self.network.get_layer_info()):
-            layer_label = f"{layer_type}: {layer_info}"
-            self.canvas.create_rectangle(
-                x_offset - 50, y_center - 30,
-                x_offset + 50, y_center + 30,
-                fill="green" if layer_type == "Conv" else "yellow", outline="black"
-            )
-            self.canvas.create_text(x_offset, y_center + 50, text=layer_label)
-            self.canvas.create_line(
-                x_offset - layer_spacing + 50, y_center,
-                x_offset - 50, y_center,
-                arrow=tk.LAST
-            )
-            x_offset += layer_spacing
-
-        output_label = f"Output: {self.network.num_classes} classes"
-        self.canvas.create_oval(
-            x_offset - node_radius, y_center - node_radius,
-            x_offset + node_radius, y_center + node_radius,
-            fill="red", outline="black"
+        # Start Button
+        self.start_button = ttk.Button(
+            sidebar, text="Start Training", command=self.start_training, style="TButton"
         )
-        self.canvas.create_text(x_offset, y_center + 30, text=output_label)
+        self.start_button.pack(pady=20)
 
-    def start_training_thread(self):
-        if self.X is None or self.y is None:
-            self.log_message("Please load a dataset first!")
-            return
-        threading.Thread(target=self.start_training).start()
+        # Metrics
+        self.metrics_label = ttk.Label(
+            sidebar, text="Loss: -\nAccuracy: -%", style="TLabel", anchor="center", justify=tk.LEFT
+        )
+        self.metrics_label.pack(pady=20)
+
+        # Plotting area
+        plot_frame = ttk.Frame(main_frame, style='TFrame')
+        plot_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        # Grid layout for plots
+        self.fig, self.axes = plt.subplots(1, 2, figsize=(12, 6))
+        self.fig.tight_layout()
+
+        # Network Diagram
+        self.ax_network = self.axes[0]
+        self.ax_network.set_title("CNN Network", fontsize=16, color="white")
+        self.ax_network.axis("off")
+
+        # Draw Layers
+        self.input_positions = self.draw_layer(self.ax_network, x=1, num_nodes=5, color='skyblue', y_offset=0)
+        self.conv_positions = self.draw_layer(self.ax_network, x=2, num_nodes=self.conv.num_filters, color='royalblue', y_offset=1)
+        self.pool_positions = self.draw_layer(self.ax_network, x=3, num_nodes=self.conv.num_filters, color='limegreen', y_offset=0)
+        self.fc_positions = self.draw_layer(self.ax_network, x=4, num_nodes=self.full.output_size, color='gold', y_offset=1)
+        self.connect_layers(self.ax_network, self.input_positions, self.conv_positions)
+        self.connect_layers(self.ax_network, self.conv_positions, self.pool_positions)
+        self.connect_layers(self.ax_network, self.pool_positions, self.fc_positions)
+
+        self.network_canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
+        self.network_canvas.draw()
+        self.network_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Training Plots (Loss and Accuracy)
+        self.ax_plots = self.axes[1]
+        self.loss_line, = self.ax_plots.plot([], [], label="Loss", color="cyan", linestyle="--")
+        self.accuracy_line, = self.ax_plots.plot([], [], label="Accuracy", color="lime", linestyle="-.")
+        self.ax_plots.set_title("Training Metrics", fontsize=16, color="white")
+        self.ax_plots.legend(facecolor="black", edgecolor="white")
+        self.ax_plots.grid(True, linestyle="--", alpha=0.5)
+
+    def draw_layer(self, ax, x, num_nodes, color='blue', y_offset=0, spacing=0.7):
+        """
+        Draw a vertical column of circular nodes representing a layer.
+
+        Args:
+            ax (matplotlib.axes.Axes): The axes on which to draw.
+            x (float): The x-position of the layer.
+            num_nodes (int): Number of nodes in this layer.
+            color (str): Color of the nodes.
+            y_offset (float): Vertical offset to position nodes.
+            spacing (float): Vertical spacing between nodes.
+
+        Returns:
+            list of tuple: Positions of the nodes.
+        """
+        positions = []
+        for i in range(num_nodes):
+            y = i * spacing + y_offset
+            circle = Circle((x, y), 0.1, color=color, fill=True)
+            ax.add_patch(circle)
+            positions.append((x, y))
+        return positions
+
+    def connect_layers(self, ax, from_positions, to_positions):
+        """
+        Draw lines representing connections between two layers.
+
+        Args:
+            ax (matplotlib.axes.Axes): The axes on which to draw.
+            from_positions (list): Positions of nodes in the preceding layer.
+            to_positions (list): Positions of nodes in the next layer.
+
+        Returns:
+            None
+        """
+        for (x1, y1) in from_positions:
+            for (x2, y2) in to_positions:
+                ax.plot([x1, x2], [y1, y2], color='gray', linewidth=0.5)
 
     def start_training(self):
-        if self.X.size == 0 or self.y.size == 0:
-            self.log_message("Invalid dataset. Please load a valid dataset before training.")
-            return
-        epochs = 10
-        learning_rate = self.learning_rate.get()
-        self.log_message("Starting training...")
-        for epoch in range(epochs):
-            try:
-                predictions = self.network.forward(self.X)
-                loss = self.network.compute_loss(predictions, self.y)
-                accuracy = self.network.compute_accuracy(predictions, self.y)
-                self.network.backward(self.X, self.y, predictions, learning_rate)
-                self.loss_values.append(loss)
-                self.accuracy_values.append(accuracy)
-                self.log_message(f"Epoch {epoch + 1}/{epochs}: Loss = {loss:.4f}, Accuracy = {accuracy * 100:.2f}%")
-                self.update_plots()
-                learning_rate *= 0.95
-            except Exception as e:
-                self.log_message(f"Error during training: {e}")
-                break
-        self.log_message("Training completed!")
+        """Starts the training process."""
+        self.start_button.config(state="disabled")
+        self.status_label.config(text="Training Started...")
+        self.run_training_step()
 
-    def update_plots(self):
-        self.loss_ax.clear()
-        self.loss_ax.set_title("Training Loss")
-        self.loss_ax.set_xlabel("Epoch")
-        self.loss_ax.set_ylabel("Loss")
-        self.loss_ax.plot(self.loss_values, label="Loss", color="blue")
-        self.loss_ax.legend()
-        self.loss_canvas.draw()
+    def run_training_step(self):
+        """Runs one training step."""
+        # Dummy logic to simulate training updates
+        epoch_loss = np.random.uniform(0.1, 1.0)
+        epoch_accuracy = np.random.uniform(70, 100)
+        self.losses.append(epoch_loss)
+        self.accuracies.append(epoch_accuracy)
 
-    def visualize_filters(self):
-        if self.network is None:
-            self.log_message("Network not initialized.")
-            return
-        filters = self.network.weights['conv']
-        num_filters = filters.shape[-1]
-        fig, axes = plt.subplots(1, num_filters, figsize=(15, 5))
-        for i in range(num_filters):
-            axes[i].imshow(filters[:, :, 0, i], cmap='gray')
-            axes[i].axis('off')
-            axes[i].set_title(f"Filter {i + 1}")
-        plt.show()
+        # Update plots
+        self.loss_line.set_data(range(len(self.losses)), self.losses)
+        self.accuracy_line.set_data(range(len(self.accuracies)), self.accuracies)
+        self.ax_plots.relim()
+        self.ax_plots.autoscale_view()
+        self.network_canvas.draw()
 
-    def visualize_feature_maps(self):
-        if self.network is None or self.X is None:
-            self.log_message("Load a dataset and train the network first.")
-            return
-        sample = self.X[0:1]
-        feature_maps = self.network.convolve(sample, self.network.weights['conv'])
-        feature_maps = self.network.relu(feature_maps)
-        num_maps = feature_maps.shape[-1]
-        fig, axes = plt.subplots(1, num_maps, figsize=(15, 5))
-        for i in range(num_maps):
-            axes[i].imshow(feature_maps[0, :, :, i], cmap='gray')
-            axes[i].axis('off')
-            axes[i].set_title(f"Feature Map {i + 1}")
-        plt.show()
+        # Update status and metrics
+        self.status_label.config(text=f"Epoch {self.current_epoch + 1} in progress...")
+        self.metrics_label.config(text=f"Loss: {epoch_loss:.4f}\nAccuracy: {epoch_accuracy:.2f}%")
+        self.current_epoch += 1
 
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = CNNVisualizer(root)
-    root.mainloop()
+        # Schedule next epoch or finish training
+        if self.current_epoch < self.epochs:
+            self.master.after(1000, self.run_training_step)
+        else:
+            self.status_label.config(text="Training Complete!")
+            self.start_button.config(state="normal")
